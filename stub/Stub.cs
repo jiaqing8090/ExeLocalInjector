@@ -12,7 +12,6 @@ using System.Security.Cryptography;
 using System.Diagnostics;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
-using System.Runtime.InteropServices;
 
 [assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
 [assembly: System.Reflection.AssemblyFileVersion("1.0.0.0")]
@@ -95,8 +94,7 @@ namespace ExeProtector
                     RunPayload();
                     return;
                 }
-                Application.Exit();
-                return;
+                // DIY 未完成验证时回退默认卡密窗口，避免 WebBrowser 兼容问题导致程序看起来打不开。
             }
 
             using (LoginForm login = new LoginForm(BuyLink, ContactLink, NoticeText))
@@ -527,26 +525,6 @@ namespace ExeProtector
         static bool DiyVerified = false;
         static string DiyVerifiedCard = "";
 
-        [ComVisible(true)]
-        public class ExeAuthBridge
-        {
-            private readonly Form form;
-            public ExeAuthBridge(Form owner) { form = owner; }
-            public void activate(string card, bool remember)
-            {
-                string expiry;
-                if (VerifyCard(card ?? "", false, out expiry)) {
-                    DiyVerified = true; DiyVerifiedCard = card ?? "";
-                    if (remember) {
-                        try { File.WriteAllText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Auth_" + AppKey.Trim() + ".dat"), DiyVerifiedCard); } catch { }
-                    }
-                    form.BeginInvoke((MethodInvoker)delegate { form.DialogResult = DialogResult.OK; form.Close(); });
-                }
-            }
-            public void buy() { string card = PurchaseOnline(); if (!string.IsNullOrEmpty(card)) activate(card, true); }
-            public void contact() { if (!string.IsNullOrEmpty(ContactLink)) try { Process.Start(ContactLink); } catch { } }
-        }
-
         static void ShowDiyPopup()
         {
             if (string.IsNullOrWhiteSpace(PopupDiyHtml)) return;
@@ -555,13 +533,40 @@ namespace ExeProtector
                     form.Text = SiteName + " - 授权验证"; form.Width = 520; form.Height = 620; form.StartPosition = FormStartPosition.CenterScreen;
                     form.FormBorderStyle = FormBorderStyle.FixedDialog; form.MinimizeBox = false; form.MaximizeBox = false;
                     WebBrowser browser = new WebBrowser { Dock = DockStyle.Fill, AllowNavigation = true, ScriptErrorsSuppressed = true, WebBrowserShortcutsEnabled = false };
-                    browser.ObjectForScripting = new ExeAuthBridge(form);
+                    browser.Navigating += delegate(object sender, WebBrowserNavigatingEventArgs e) {
+                        string url = e.Url.ToString();
+                        if (!url.StartsWith("auth://")) return;
+                        e.Cancel = true;
+                        if (url.StartsWith("auth://activate")) {
+                            string card = ""; bool remember = true;
+                            try {
+                                object cardObj = browser.Document.InvokeScript("eval", new object[] { "document.getElementById('card-input')?document.getElementById('card-input').value:''" });
+                                object remObj = browser.Document.InvokeScript("eval", new object[] { "document.getElementById('remember-card')?document.getElementById('remember-card').checked:true" });
+                                card = cardObj == null ? "" : cardObj.ToString();
+                                remember = remObj == null || remObj.ToString().ToLower() == "true";
+                            } catch { }
+                            string expiry;
+                            if (VerifyCard(card, false, out expiry)) {
+                                DiyVerified = true; DiyVerifiedCard = card;
+                                if (remember) try { File.WriteAllText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Auth_" + AppKey.Trim() + ".dat"), card); } catch { }
+                                form.DialogResult = DialogResult.OK; form.Close();
+                            }
+                        } else if (url.StartsWith("auth://buy")) {
+                            string card = PurchaseOnline();
+                            if (!string.IsNullOrEmpty(card)) {
+                                string expiry;
+                                if (VerifyCard(card, false, out expiry)) { DiyVerified = true; DiyVerifiedCard = card; form.DialogResult = DialogResult.OK; form.Close(); }
+                            }
+                        } else if (url.StartsWith("auth://contact")) {
+                            if (!string.IsNullOrEmpty(ContactLink)) try { Process.Start(ContactLink); } catch { }
+                        }
+                    };
                     browser.DocumentCompleted += delegate {
                         string notice = NoticeText ?? "";
                         string script = "var n=document.getElementById('notice-box');if(n)n.innerText='公告：' + " + ToJsString(notice) + ";" +
-                            "var b=document.getElementById('buy-btn');if(b){b.style.display='" + (string.IsNullOrEmpty(BuyLink) ? "none" : "") + "';b.onclick=function(){window.external.buy();};}" +
-                            "var c=document.getElementById('contact-btn');if(c){c.style.display='" + (string.IsNullOrEmpty(ContactLink) ? "none" : "") + "';c.onclick=function(){window.external.contact();};}" +
-                            "var a=document.getElementById('activate-btn');if(a)a.onclick=function(){var i=document.getElementById('card-input');var r=document.getElementById('remember-card');window.external.activate(i?i.value:'',r?!!r.checked:true);};";
+                            "var b=document.getElementById('buy-btn');if(b){b.style.display='" + (string.IsNullOrEmpty(BuyLink) ? "none" : "") + "';b.onclick=function(){location.href='auth://buy';};}" +
+                            "var c=document.getElementById('contact-btn');if(c){c.style.display='" + (string.IsNullOrEmpty(ContactLink) ? "none" : "") + "';c.onclick=function(){location.href='auth://contact';};}" +
+                            "var a=document.getElementById('activate-btn');if(a)a.onclick=function(){location.href='auth://activate';};";
                         try { browser.Document.InvokeScript("execScript", new object[] { script, "JavaScript" }); } catch { }
                     };
                     browser.DocumentText = WrapDiyHtml(PopupDiyHtml);
