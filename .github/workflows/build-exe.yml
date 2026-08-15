@@ -39,6 +39,12 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "Stub compilation failed" }
           if (-not (Test-Path "stub/Verification.exe")) { throw "Verification.exe was not generated" }
 
+      - name: Upload compiled Stub
+        uses: actions/upload-artifact@v4
+        with:
+          name: Verification-Stub-EXE
+          path: stub/Verification.exe
+
       - name: Build EXE with PyInstaller
         run: |
           pyinstaller -F -w `
