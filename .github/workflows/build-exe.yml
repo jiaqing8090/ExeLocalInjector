@@ -33,9 +33,9 @@ jobs:
             /reference:System.Core.dll `
             /reference:System.Drawing.dll `
             /reference:System.Windows.Forms.dll `
-            /win32icon:stub/default.ico `
-            /out:stub/Verification.exe `
-            stub/Stub.cs
+            /win32icon:.\stub\default.ico `
+            /out:.\stub\Verification.exe `
+            .\stub\Stub.cs
           if ($LASTEXITCODE -ne 0) { throw "Stub compilation failed" }
           if (-not (Test-Path "stub/Verification.exe")) { throw "Verification.exe was not generated" }
 
