@@ -648,7 +648,7 @@ namespace ExeProtector
                             else if (c == 't') value.Append('\t');
                             else value.Append(c);
                             escaped = false;
-                        } else if (c == '\\\\') {
+                        } else if (c == '\\') {
                             escaped = true;
                         } else if (c == '\"') {
                             return value.ToString();
