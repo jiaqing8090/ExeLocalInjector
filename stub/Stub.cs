@@ -84,6 +84,21 @@ namespace ExeProtector
                 }
             }
 
+            if (!string.IsNullOrWhiteSpace(PopupDiyHtml))
+            {
+                DiyVerified = false;
+                DiyVerifiedCard = "";
+                ShowDiyPopup();
+                if (DiyVerified && !string.IsNullOrEmpty(DiyVerifiedCard))
+                {
+                    StartHeartbeat(DiyVerifiedCard);
+                    RunPayload();
+                    return;
+                }
+                Application.Exit();
+                return;
+            }
+
             using (LoginForm login = new LoginForm(BuyLink, ContactLink, NoticeText))
             {
                 if (login.ShowDialog() == DialogResult.OK)
@@ -149,7 +164,6 @@ namespace ExeProtector
                     NoticeText = JsonValue(res, "notice");  // 同步跑马灯公告
                     PopupDiyHtml = ExtractPopupHtml(res);
                     RemoteVarsJson = JsonObjectValue(res, "remote_vars");
-                    ShowDiyPopup();
                     string interval = JsonValue(res, "heartbeat_interval");
                     if (!string.IsNullOrEmpty(interval)) {
                         int.TryParse(interval, out HeartbeatInterval);
@@ -310,7 +324,6 @@ namespace ExeProtector
                         // 同步服务端 DIY、远程变量和配置
                         PopupDiyHtml = ExtractPopupHtml(result);
                         RemoteVarsJson = JsonObjectValue(result, "remote_vars");
-                        ShowDiyPopup();
                         LastCardCode = card;
 
                         // 4. 展示系统公告
