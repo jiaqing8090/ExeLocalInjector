@@ -644,9 +644,12 @@ namespace ExeProtector
                 string packageName = JsonValue(selectedRow, "name");
                 string price = JsonValue(selectedRow, "price");
                 if (string.IsNullOrEmpty(packageId)) { MessageBox.Show("套餐数据缺少 package_id。", "在线购买"); return ""; }
-                if (MessageBox.Show("套餐：" + packageName + "\n价格：" + price + "\n\n是否打开支付？", "在线购买", MessageBoxButtons.YesNo, MessageBoxIcon.Information) != DialogResult.Yes) return "";
+                string[] paymentRows = JsonArrayObjects(packages, "payment_methods");
+                if (paymentRows.Length == 0) { MessageBox.Show("商家暂未配置在线支付。", "在线购买"); return ""; }
+                string paymentType = SelectPayment("套餐：" + packageName + "    ¥" + price, paymentRows);
+                if (string.IsNullOrEmpty(paymentType)) return "";
                 ts = (GetUnixTime() + ServerTimeOffset).ToString(); nonce = Guid.NewGuid().ToString("N").Substring(0, 16); sign = ComputeSha256(AppKey.Trim() + AppSecret.Trim() + ts + nonce);
-                string orderBody = string.Format("{{\"app_key\":\"{0}\",\"package_id\":{1},\"device_id\":\"{2}\",\"pay_type\":\"alipay\",\"auto_activate\":true,\"platform\":\"windows\",\"timestamp\":\"{3}\",\"nonce\":\"{4}\",\"sign\":\"{5}\"}}", AppKey.Trim(), packageId, GetDeviceId(), ts, nonce, sign);
+                string orderBody = string.Format("{{\"app_key\":\"{0}\",\"package_id\":{1},\"device_id\":\"{2}\",\"pay_type\":\"{3}\",\"auto_activate\":true,\"platform\":\"windows\",\"timestamp\":\"{4}\",\"nonce\":\"{5}\",\"sign\":\"{6}\"}}", AppKey.Trim(), packageId, GetDeviceId(), paymentType, ts, nonce, sign);
                 string order;
                 using (var client = new WebClient()) { client.Encoding = Encoding.UTF8; client.Headers[HttpRequestHeader.ContentType] = "application/json; charset=utf-8"; client.Proxy = null; order = client.UploadString(ApiHost.TrimEnd('/') + "/api/shop/order/create", "POST", orderBody); }
                 string orderData = JsonObjectValue(order, "data");
@@ -664,6 +667,26 @@ namespace ExeProtector
                 MessageBox.Show("暂未查询到支付结果，请稍后重试。", "订单查询");
             } catch (Exception ex) { MessageBox.Show("在线购买失败：" + ex.Message, "错误"); }
             return "";
+        }
+
+        static string SelectPayment(string title, string[] rows)
+        {
+            string[] labels = new string[rows.Length];
+            for (int i = 0; i < rows.Length; i++) {
+                string code = JsonValue(rows[i], "code"); string name = JsonValue(rows[i], "name");
+                labels[i] = string.IsNullOrEmpty(name) ? code : name;
+            }
+            using (Form f = new Form()) {
+                f.Text = "选择支付方式"; f.Width = 360; f.Height = 190; f.StartPosition = FormStartPosition.CenterScreen;
+                Label l = new Label { Text = title, Left = 15, Top = 15, Width = 320, Height = 35 };
+                ComboBox c = new ComboBox { Left = 15, Top = 58, Width = 320, DropDownStyle = ComboBoxStyle.DropDownList };
+                c.Items.AddRange(labels); if (c.Items.Count > 0) c.SelectedIndex = 0;
+                Button ok = new Button { Text = "继续支付", Left = 175, Top = 105, Width = 75, DialogResult = DialogResult.OK };
+                Button cancel = new Button { Text = "取消", Left = 260, Top = 105, Width = 75, DialogResult = DialogResult.Cancel };
+                f.Controls.Add(l); f.Controls.Add(c); f.Controls.Add(ok); f.Controls.Add(cancel); f.AcceptButton = ok; f.CancelButton = cancel;
+                if (f.ShowDialog() != DialogResult.OK || c.SelectedIndex < 0) return "";
+                return JsonValue(rows[c.SelectedIndex], "code");
+            }
         }
 
         static int SelectPackage(string text, int count)
@@ -773,9 +796,10 @@ namespace ExeProtector
     public class LoginForm : Form
     {
         private TextBox txtCard;
-        private Button btnLogin, btnBuy, btnContact;
+        private Button btnLogin, btnBuy, btnContact, btnMode;
         private CheckBox chkSave;
-        private Label lblNotice;
+        private Label lblCard, lblNotice;
+        private bool onlineMode = false;
         private System.Windows.Forms.Timer noticeTimer;
         private int noticeScrollPos = 0;
         private string fullNoticeText = "";
@@ -790,8 +814,9 @@ namespace ExeProtector
             this.StartPosition = FormStartPosition.CenterScreen;
             this.BackColor = Color.WhiteSmoke;
 
-            Label lbl = new Label() { Text = "请输入卡密进行激活:", Left = 20, Top = 20, Width = 300, Font = new Font("微软雅黑", 10, FontStyle.Bold) };
+            lblCard = new Label() { Text = "请输入卡密进行激活:", Left = 20, Top = 20, Width = 300, Font = new Font("微软雅黑", 10, FontStyle.Bold) };
             txtCard = new TextBox() { Left = 20, Top = 50, Width = 360, Font = new Font("Consolas", 11) };
+            btnMode = new Button() { Text = "在线激活", Left = 325, Top = 12, Width = 75, Height = 26, FlatStyle = FlatStyle.Flat, Font = new Font("微软雅黑", 8) };
             chkSave = new CheckBox() { Text = "记住卡密 (下次自动登录)", Left = 20, Top = 90, Width = 200, Checked = true, Font = new Font("微软雅黑", 9) };
 
             btnLogin = new Button() { Text = "验证启动", Left = 280, Top = 190, Width = 100, Height = 40, FlatStyle = FlatStyle.Flat, BackColor = Color.DeepSkyBlue, ForeColor = Color.White, Font = new Font("微软雅黑", 9, FontStyle.Bold) };
@@ -827,6 +852,8 @@ namespace ExeProtector
                 this.Controls.Add(noticePanel);
             }
 
+            btnMode.Click += (s, e) => { SetOnlineMode(!onlineMode, buyUrl, contactUrl); };
+
             btnLogin.Click += (s, e) => {
                 this.CardCode = txtCard.Text.Trim();
                 this.RememberCard = chkSave.Checked;
@@ -845,13 +872,30 @@ namespace ExeProtector
                 else MessageBox.Show("后台未配置客服链接。");
             };
 
-            this.Controls.Add(lbl);
+            this.Controls.Add(lblCard);
             this.Controls.Add(txtCard);
+            this.Controls.Add(btnMode);
             this.Controls.Add(chkSave);
             this.Controls.Add(btnLogin);
             this.Controls.Add(btnBuy);
             this.Controls.Add(btnContact);
             this.AcceptButton = btnLogin;
+        }
+
+        private void SetOnlineMode(bool online, string buyUrl, string contactUrl)
+        {
+            onlineMode = online;
+            lblCard.Visible = !online;
+            txtCard.Visible = !online;
+            chkSave.Visible = !online;
+            btnLogin.Visible = !online;
+            btnMode.Text = online ? "卡密激活" : "在线激活";
+            btnBuy.Visible = online || !string.IsNullOrEmpty(buyUrl);
+            btnBuy.Text = online ? "选择套餐并支付" : "购买卡密";
+            btnBuy.Left = online ? 115 : 20;
+            btnContact.Left = online ? 205 : 110;
+            btnContact.Visible = !string.IsNullOrEmpty(contactUrl);
+            this.AcceptButton = online ? null : btnLogin;
         }
     }
 }
