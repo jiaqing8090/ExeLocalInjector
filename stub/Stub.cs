@@ -41,6 +41,8 @@ namespace ExeProtector
         private static string RemoteVarsJson = "{}"; // 应用远程变量
         private static string LastCardCode = "";
         private static string LastShopOrderNo = "";
+        private static bool TrialActive = false;
+        private static string TrialExpireTime = "";
 
         [STAThread]
         static void Main()
@@ -62,6 +64,13 @@ namespace ExeProtector
 
             // 1. 启动即同步云端配置 (对齐 iOS Verification.m)
             FetchConfig();
+
+            if (TrialActive)
+            {
+                StartHeartbeat("");
+                RunPayload();
+                return;
+            }
 
             string cacheName = "Auth_" + AppKey.Trim() + ".dat";
             string cachePath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), cacheName);
@@ -149,6 +158,9 @@ namespace ExeProtector
                     NoticeText = JsonValue(res, "notice");  // 同步跑马灯公告
                     PopupDiyHtml = ExtractPopupHtml(res);
                     RemoteVarsJson = JsonObjectValue(res, "remote_vars");
+                    string initStatus = JsonValue(res, "status");
+                    TrialActive = initStatus == "trial";
+                    TrialExpireTime = JsonValue(res, "expire_time");
                     string interval = JsonValue(res, "heartbeat_interval");
                     if (!string.IsNullOrEmpty(interval)) {
                         int.TryParse(interval, out HeartbeatInterval);
@@ -466,7 +478,13 @@ namespace ExeProtector
                                 Environment.Exit(0);
                             }
                         }
-                    } catch { }
+                    } catch {
+                        string message = TrialActive
+                            ? "试用模式必须保持联网，请连接网络后重新启动。"
+                            : "网络连接已断开，无法完成授权校验，请连接网络后重新启动。";
+                        MessageBox.Show(message, "授权校验中断", MessageBoxButtons.OK, MessageBoxIcon.Stop);
+                        Environment.Exit(0);
+                    }
                 }
             }) { IsBackground = true }.Start();
         }
