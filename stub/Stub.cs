@@ -94,8 +94,7 @@ namespace ExeProtector
                     RunPayload();
                     return;
                 }
-                Application.Exit();
-                return;
+                // DIY 关闭或加载异常时回到默认卡密窗口，避免白屏后直接退出。
             }
 
             using (LoginForm login = new LoginForm(BuyLink, ContactLink, NoticeText))
@@ -562,7 +561,11 @@ namespace ExeProtector
                             if (!string.IsNullOrEmpty(ContactLink)) try { Process.Start(ContactLink); } catch { }
                         }
                     };
+                    string diyDocument = WrapDiyHtml(PopupDiyHtml);
+                    bool loaded = false;
                     browser.DocumentCompleted += delegate {
+                        if (loaded || browser.Document == null) return;
+                        loaded = true;
                         string notice = NoticeText ?? "";
                         string script = "var n=document.getElementById('notice-box');if(n)n.innerText='公告：' + " + ToJsString(notice) + ";" +
                             "var b=document.getElementById('buy-btn');if(b){b.style.display='" + (string.IsNullOrEmpty(BuyLink) ? "none" : "") + "';b.onclick=function(){location.href='auth://buy';};}" +
@@ -570,7 +573,10 @@ namespace ExeProtector
                             "var a=document.getElementById('activate-btn');if(a)a.onclick=function(){location.href='auth://activate';};";
                         try { browser.Document.InvokeScript("execScript", new object[] { script, "JavaScript" }); } catch { }
                     };
-                    browser.DocumentText = WrapDiyHtml(PopupDiyHtml);
+                    form.Shown += delegate {
+                        try { browser.DocumentText = diyDocument; }
+                        catch (Exception ex) { MessageBox.Show("DIY 界面加载失败：" + ex.Message, "授权验证"); form.Close(); }
+                    };
                     form.ShowDialog();
                 }
             } catch { }
