@@ -83,20 +83,7 @@ namespace ExeProtector
                 }
             }
 
-            if (!string.IsNullOrWhiteSpace(PopupDiyHtml))
-            {
-                DiyVerified = false;
-                DiyVerifiedCard = "";
-                ShowDiyPopup();
-                if (DiyVerified && !string.IsNullOrEmpty(DiyVerifiedCard))
-                {
-                    StartHeartbeat(DiyVerifiedCard);
-                    RunPayload();
-                    return;
-                }
-                // DIY 关闭或加载异常时回到默认卡密窗口，避免白屏后直接退出。
-            }
-
+            // Windows EXE 统一使用稳定的默认卡密窗口，不启动后台 HTML DIY 窗口。
             using (LoginForm login = new LoginForm(BuyLink, ContactLink, NoticeText))
             {
                 if (login.ShowDialog() == DialogResult.OK)
