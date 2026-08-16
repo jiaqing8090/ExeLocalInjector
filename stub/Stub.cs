@@ -527,6 +527,28 @@ namespace ExeProtector
 
         static void ShowDiyPopup()
         {
+            using (Form form = new Form()) {
+                form.Text = SiteName + " - 授权验证"; form.Width = 460; form.Height = 260; form.StartPosition = FormStartPosition.CenterScreen;
+                form.FormBorderStyle = FormBorderStyle.FixedDialog; form.MinimizeBox = false; form.MaximizeBox = false;
+                Label title = new Label { Text = "请输入卡密进行激活", Left = 22, Top = 18, Width = 390, Height = 28, Font = new Font("Microsoft YaHei", 12, FontStyle.Bold) };
+                Label notice = new Label { Text = string.IsNullOrEmpty(NoticeText) ? "" : "公告：" + NoticeText, Left = 22, Top = 52, Width = 390, Height = 38, AutoSize = false, ForeColor = Color.DarkGoldenrod };
+                TextBox card = new TextBox { Left = 22, Top = 96, Width = 390, Height = 28, Font = new Font("Consolas", 11) };
+                CheckBox remember = new CheckBox { Text = "记住卡密，下次自动验证", Left = 22, Top = 132, Width = 210, Checked = true };
+                Button activate = new Button { Text = "立即激活", Left = 245, Top = 165, Width = 90, Height =  thirtyFive() };
+                Button buy = new Button { Text = "在线购买", Left = 22, Top = 165, Width = 90, Height = 35, Visible = !string.IsNullOrEmpty(BuyLink) };
+                Button contact = new Button { Text = "联系客服", Left = 120, Top = 165, Width = 90, Height = 35, Visible = !string.IsNullOrEmpty(ContactLink) };
+                activate.Click += delegate { string expiry; if (VerifyCard(card.Text.Trim(), false, out expiry)) { DiyVerified = true; DiyVerifiedCard = card.Text.Trim(); if (remember.Checked) try { File.WriteAllText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Auth_" + AppKey.Trim() + ".dat"), DiyVerifiedCard); } catch { } form.DialogResult = DialogResult.OK; form.Close(); } };
+                buy.Click += delegate { string purchased = PurchaseOnline(); if (!string.IsNullOrEmpty(purchased)) { card.Text = purchased; activate.PerformClick(); } };
+                contact.Click += delegate { try { Process.Start(ContactLink); } catch { } };
+                form.Controls.Add(title); form.Controls.Add(notice); form.Controls.Add(card); form.Controls.Add(remember); form.Controls.Add(activate); form.Controls.Add(buy); form.Controls.Add(contact); form.AcceptButton = activate;
+                form.ShowDialog();
+            }
+        }
+
+        static int thirtyFive() { return 35; }
+
+        static void ShowDiyPopupHtml()
+        {
             if (string.IsNullOrWhiteSpace(PopupDiyHtml)) return;
             try {
                 using (Form form = new Form()) {
