@@ -94,7 +94,8 @@ namespace ExeProtector
                     RunPayload();
                     return;
                 }
-                // DIY 未完成验证时回退默认卡密窗口，避免 WebBrowser 兼容问题导致程序看起来打不开。
+                Application.Exit();
+                return;
             }
 
             using (LoginForm login = new LoginForm(BuyLink, ContactLink, NoticeText))
@@ -592,16 +593,26 @@ namespace ExeProtector
                 string body = string.Format("{{\"app_key\":\"{0}\",\"timestamp\":\"{1}\",\"nonce\":\"{2}\",\"sign\":\"{3}\",\"platform\":\"windows\"}}", AppKey.Trim(), ts, nonce, sign);
                 string packages;
                 using (var client = new WebClient()) { client.Headers[HttpRequestHeader.ContentType] = "application/json"; client.Proxy = null; packages = client.UploadString(ApiHost.TrimEnd('/') + "/api/shop/packages", "POST", body); }
-                string packageId = JsonValue(packages, "package_id");
-                string packageName = JsonValue(packages, "name");
-                string price = JsonValue(packages, "price");
-                if (string.IsNullOrEmpty(packageId)) { MessageBox.Show("当前没有可购买套餐。", "在线购买"); return ""; }
+                string data = JsonObjectValue(packages, "data");
+                string[] rows = JsonArrayObjects(packages, "data");
+                if (rows.Length == 0 && data != "{}") rows = new string[] { data };
+                if (rows.Length == 0) { MessageBox.Show(JsonValue(packages, "msg") ?? "当前没有可购买套餐。", "在线购买"); return ""; }
+                string list = "请选择套餐编号：\n\n";
+                for (int i = 0; i < rows.Length; i++) list += (i + 1) + ". " + JsonValue(rows[i], "name") + "    ¥" + JsonValue(rows[i], "price") + "\n";
+                int selected = SelectPackage(list, rows.Length);
+                if (selected < 1 || selected > rows.Length) return "";
+                string selectedRow = rows[selected - 1];
+                string packageId = JsonValue(selectedRow, "package_id");
+                string packageName = JsonValue(selectedRow, "name");
+                string price = JsonValue(selectedRow, "price");
+                if (string.IsNullOrEmpty(packageId)) { MessageBox.Show("套餐数据缺少 package_id。", "在线购买"); return ""; }
                 if (MessageBox.Show("套餐：" + packageName + "\n价格：" + price + "\n\n是否打开支付？", "在线购买", MessageBoxButtons.YesNo, MessageBoxIcon.Information) != DialogResult.Yes) return "";
                 ts = (GetUnixTime() + ServerTimeOffset).ToString(); nonce = Guid.NewGuid().ToString("N").Substring(0, 16); sign = ComputeSha256(AppKey.Trim() + AppSecret.Trim() + ts + nonce);
                 string orderBody = string.Format("{{\"app_key\":\"{0}\",\"package_id\":{1},\"device_id\":\"{2}\",\"pay_type\":\"alipay\",\"auto_activate\":true,\"platform\":\"windows\",\"timestamp\":\"{3}\",\"nonce\":\"{4}\",\"sign\":\"{5}\"}}", AppKey.Trim(), packageId, GetDeviceId(), ts, nonce, sign);
                 string order;
                 using (var client = new WebClient()) { client.Headers[HttpRequestHeader.ContentType] = "application/json"; client.Proxy = null; order = client.UploadString(ApiHost.TrimEnd('/') + "/api/shop/order/create", "POST", orderBody); }
-                string orderNo = JsonValue(order, "order_no"); string payUrl = JsonValue(order, "pay_url");
+                string orderData = JsonObjectValue(order, "data");
+                string orderNo = JsonValue(orderData, "order_no"); string payUrl = JsonValue(orderData, "pay_url");
                 if (string.IsNullOrEmpty(orderNo) || string.IsNullOrEmpty(payUrl)) { MessageBox.Show(JsonValue(order, "msg"), "创建订单失败"); return ""; }
                 LastShopOrderNo = orderNo; Process.Start(payUrl);
                 if (MessageBox.Show("支付完成后点击确定查询订单。", "等待支付", MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK) return "";
@@ -609,11 +620,36 @@ namespace ExeProtector
                     Thread.Sleep(2000); ts = (GetUnixTime() + ServerTimeOffset).ToString(); nonce = Guid.NewGuid().ToString("N").Substring(0, 16); sign = ComputeSha256(AppKey.Trim() + AppSecret.Trim() + ts + nonce);
                     string statusBody = string.Format("{{\"app_key\":\"{0}\",\"order_no\":\"{1}\",\"device_id\":\"{2}\",\"platform\":\"windows\",\"timestamp\":\"{3}\",\"nonce\":\"{4}\",\"sign\":\"{5}\"}}", AppKey.Trim(), orderNo, GetDeviceId(), ts, nonce, sign);
                     string status; using (var client = new WebClient()) { client.Headers[HttpRequestHeader.ContentType] = "application/json"; client.Proxy = null; status = client.UploadString(ApiHost.TrimEnd('/') + "/api/shop/order/status", "POST", statusBody); }
-                    if (JsonValue(status, "paid") == "true" || JsonValue(status, "activated") == "1") { string card = JsonValue(status, "key_code"); if (!string.IsNullOrEmpty(card)) { MessageBox.Show("支付成功，已自动获取卡密。", "购买成功"); return card; } }
+                    string statusData = JsonObjectValue(status, "data");
+                    if (JsonValue(statusData, "paid") == "true" || JsonValue(statusData, "activated") == "1") { string card = JsonValue(statusData, "key_code"); if (!string.IsNullOrEmpty(card)) { MessageBox.Show("支付成功，已自动获取卡密。", "购买成功"); return card; } }
                 }
                 MessageBox.Show("暂未查询到支付结果，请稍后重试。", "订单查询");
             } catch (Exception ex) { MessageBox.Show("在线购买失败：" + ex.Message, "错误"); }
             return "";
+        }
+
+        static int SelectPackage(string text, int count)
+        {
+            using (Form f = new Form()) {
+                f.Text = "在线购买 - 选择套餐"; f.Width = 430; f.Height = 300; f.StartPosition = FormStartPosition.CenterScreen;
+                Label l = new Label { Text = text, Left = 15, Top = 15, Width = 380, Height = 170, AutoSize = false };
+                NumericUpDown n = new NumericUpDown { Left = 15, Top = 195, Width = 100, Minimum = 1, Maximum = count, Value = 1 };
+                Button ok = new Button { Text = "确定", Left = 250, Top = 190, Width = 70, DialogResult = DialogResult.OK };
+                Button cancel = new Button { Text = "取消", Left = 330, Top = 190, Width = 70, DialogResult = DialogResult.Cancel };
+                f.Controls.Add(l); f.Controls.Add(n); f.Controls.Add(ok); f.Controls.Add(cancel); f.AcceptButton = ok; f.CancelButton = cancel;
+                return f.ShowDialog() == DialogResult.OK ? (int)n.Value : 0;
+            }
+        }
+
+        static string[] JsonArrayObjects(string json, string key)
+        {
+            try {
+                string marker = "\"" + key + "\""; int idx = json.IndexOf(marker); if (idx < 0) return new string[0];
+                int start = json.IndexOf('[', idx + marker.Length); if (start < 0) return new string[0];
+                int depth = 0; bool quoted = false; bool escaped = false; int objectStart = -1; List<string> result = new List<string>();
+                for (int i = start + 1; i < json.Length; i++) { char c = json[i]; if (escaped) { escaped = false; continue; } if (c == '\\' && quoted) { escaped = true; continue; } if (c == '\"') { quoted = !quoted; continue; } if (quoted) continue; if (c == '{') { if (depth == 0) objectStart = i; depth++; } else if (c == '}' && depth > 0) { depth--; if (depth == 0 && objectStart >= 0) result.Add(json.Substring(objectStart, i - objectStart + 1)); } else if (c == ']' && depth == 0) break; }
+                return result.ToArray();
+            } catch { return new string[0]; }
         }
 
         static string JsonObjectValue(string json, string key)
