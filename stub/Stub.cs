@@ -587,8 +587,11 @@ namespace ExeProtector
 
         static string ToJsString(string value) { return "'" + (value ?? "").Replace("\\", "\\\\").Replace("'", "\\'").Replace("\r", "").Replace("\n", "\\n") + "'"; }
         static string WrapDiyHtml(string html) {
-            if (html.IndexOf("<html", StringComparison.OrdinalIgnoreCase) >= 0) return html;
-            return "<!doctype html><html><head><meta charset='utf-8'><style>html,body{margin:0;padding:0;background:#fff;}*{box-sizing:border-box;}</style></head><body>" + html + "</body></html>";
+            string body = html ?? "";
+            // 后台 DIY 是 HTML 片段，统一包装成 IE WebBrowser 可加载的完整文档。
+            int htmlStart = body.IndexOf("<html", StringComparison.OrdinalIgnoreCase);
+            if (htmlStart >= 0) return body;
+            return "<!DOCTYPE html><html><head><meta http-equiv='X-UA-Compatible' content='IE=Edge' /><meta http-equiv='Content-Type' content='text/html; charset=utf-8' /><style>html,body{margin:0;padding:0;background:#f5f7fb;color:#172033;font-family:Microsoft YaHei,Arial,sans-serif;}*{box-sizing:border-box;}</style></head><body>" + body + "</body></html>";
         }
 
         internal static string GetRemoteVarsJson() { return RemoteVarsJson ?? "{}"; }
