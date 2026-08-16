@@ -286,8 +286,7 @@ namespace ExeProtector
                         string calcSign = ComputeSha256(signRaw);
                         
                         if (calcSign.ToLower() != serverSign.ToLower()) {
-                            // 暂时仅提醒，不拦截，方便排查
-                            MessageBox.Show("校验异常(可忽略): 签名不匹配。\n预期: " + serverSign.Substring(0, 8) + "...\n实际: " + calcSign.Substring(0, 8) + "...", "安全提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
+                            // 响应签名兼容旧接口：不弹窗、不拦截。
                         }
                     }
 
