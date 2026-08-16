@@ -563,6 +563,8 @@ namespace ExeProtector
                     };
                     string diyDocument = WrapDiyHtml(PopupDiyHtml);
                     bool loaded = false;
+                    string diyFile = Path.Combine(Path.GetTempPath(), "exe_auth_" + Guid.NewGuid().ToString("N") + ".html");
+                    File.WriteAllText(diyFile, diyDocument, Encoding.UTF8);
                     browser.DocumentCompleted += delegate {
                         if (loaded || browser.Document == null) return;
                         loaded = true;
@@ -574,9 +576,10 @@ namespace ExeProtector
                         try { browser.Document.InvokeScript("execScript", new object[] { script, "JavaScript" }); } catch { }
                     };
                     form.Shown += delegate {
-                        try { browser.DocumentText = diyDocument; }
+                        try { browser.Navigate(new Uri(diyFile).AbsoluteUri); }
                         catch (Exception ex) { MessageBox.Show("DIY 界面加载失败：" + ex.Message, "授权验证"); form.Close(); }
                     };
+                    form.FormClosed += delegate { try { if (File.Exists(diyFile)) File.Delete(diyFile); } catch { } };
                     form.ShowDialog();
                 }
             } catch { }
@@ -598,7 +601,7 @@ namespace ExeProtector
                 string sign = ComputeSha256(AppKey.Trim() + AppSecret.Trim() + ts + nonce);
                 string body = string.Format("{{\"app_key\":\"{0}\",\"timestamp\":\"{1}\",\"nonce\":\"{2}\",\"sign\":\"{3}\",\"platform\":\"windows\"}}", AppKey.Trim(), ts, nonce, sign);
                 string packages;
-                using (var client = new WebClient()) { client.Headers[HttpRequestHeader.ContentType] = "application/json"; client.Proxy = null; packages = client.UploadString(ApiHost.TrimEnd('/') + "/api/shop/packages", "POST", body); }
+                using (var client = new WebClient()) { client.Encoding = Encoding.UTF8; client.Headers[HttpRequestHeader.ContentType] = "application/json; charset=utf-8"; client.Proxy = null; packages = client.UploadString(ApiHost.TrimEnd('/') + "/api/shop/packages", "POST", body); }
                 string data = JsonObjectValue(packages, "data");
                 string[] rows = JsonArrayObjects(packages, "data");
                 if (rows.Length == 0 && data != "{}") rows = new string[] { data };
@@ -616,7 +619,7 @@ namespace ExeProtector
                 ts = (GetUnixTime() + ServerTimeOffset).ToString(); nonce = Guid.NewGuid().ToString("N").Substring(0, 16); sign = ComputeSha256(AppKey.Trim() + AppSecret.Trim() + ts + nonce);
                 string orderBody = string.Format("{{\"app_key\":\"{0}\",\"package_id\":{1},\"device_id\":\"{2}\",\"pay_type\":\"alipay\",\"auto_activate\":true,\"platform\":\"windows\",\"timestamp\":\"{3}\",\"nonce\":\"{4}\",\"sign\":\"{5}\"}}", AppKey.Trim(), packageId, GetDeviceId(), ts, nonce, sign);
                 string order;
-                using (var client = new WebClient()) { client.Headers[HttpRequestHeader.ContentType] = "application/json"; client.Proxy = null; order = client.UploadString(ApiHost.TrimEnd('/') + "/api/shop/order/create", "POST", orderBody); }
+                using (var client = new WebClient()) { client.Encoding = Encoding.UTF8; client.Headers[HttpRequestHeader.ContentType] = "application/json; charset=utf-8"; client.Proxy = null; order = client.UploadString(ApiHost.TrimEnd('/') + "/api/shop/order/create", "POST", orderBody); }
                 string orderData = JsonObjectValue(order, "data");
                 string orderNo = JsonValue(orderData, "order_no"); string payUrl = JsonValue(orderData, "pay_url");
                 if (string.IsNullOrEmpty(orderNo) || string.IsNullOrEmpty(payUrl)) { MessageBox.Show(JsonValue(order, "msg"), "创建订单失败"); return ""; }
@@ -625,7 +628,7 @@ namespace ExeProtector
                 for (int i = 0; i < 30; i++) {
                     Thread.Sleep(2000); ts = (GetUnixTime() + ServerTimeOffset).ToString(); nonce = Guid.NewGuid().ToString("N").Substring(0, 16); sign = ComputeSha256(AppKey.Trim() + AppSecret.Trim() + ts + nonce);
                     string statusBody = string.Format("{{\"app_key\":\"{0}\",\"order_no\":\"{1}\",\"device_id\":\"{2}\",\"platform\":\"windows\",\"timestamp\":\"{3}\",\"nonce\":\"{4}\",\"sign\":\"{5}\"}}", AppKey.Trim(), orderNo, GetDeviceId(), ts, nonce, sign);
-                    string status; using (var client = new WebClient()) { client.Headers[HttpRequestHeader.ContentType] = "application/json"; client.Proxy = null; status = client.UploadString(ApiHost.TrimEnd('/') + "/api/shop/order/status", "POST", statusBody); }
+                    string status; using (var client = new WebClient()) { client.Encoding = Encoding.UTF8; client.Headers[HttpRequestHeader.ContentType] = "application/json; charset=utf-8"; client.Proxy = null; status = client.UploadString(ApiHost.TrimEnd('/') + "/api/shop/order/status", "POST", statusBody); }
                     string statusData = JsonObjectValue(status, "data");
                     if (JsonValue(statusData, "paid") == "true" || JsonValue(statusData, "activated") == "1") { string card = JsonValue(statusData, "key_code"); if (!string.IsNullOrEmpty(card)) { MessageBox.Show("支付成功，已自动获取卡密。", "购买成功"); return card; } }
                 }
@@ -637,11 +640,12 @@ namespace ExeProtector
         static int SelectPackage(string text, int count)
         {
             using (Form f = new Form()) {
-                f.Text = "在线购买 - 选择套餐"; f.Width = 430; f.Height = 300; f.StartPosition = FormStartPosition.CenterScreen;
-                Label l = new Label { Text = text, Left = 15, Top = 15, Width = 380, Height = 170, AutoSize = false };
-                NumericUpDown n = new NumericUpDown { Left = 15, Top = 195, Width = 100, Minimum = 1, Maximum = count, Value = 1 };
-                Button ok = new Button { Text = "确定", Left = 250, Top = 190, Width = 70, DialogResult = DialogResult.OK };
-                Button cancel = new Button { Text = "取消", Left = 330, Top = 190, Width = 70, DialogResult = DialogResult.Cancel };
+                f.Text = "在线购买 - 选择套餐"; f.Width = 520; f.Height = Math.Min(620, Math.Max(300, 150 + count * 42)); f.StartPosition = FormStartPosition.CenterScreen;
+                Label l = new Label { Text = text, Left = 15, Top = 15, Width = 470, Height = Math.Max(170, count * 32 + 45), AutoSize = false };
+                int buttonTop = Math.Max(195, 30 + count * 32);
+                NumericUpDown n = new NumericUpDown { Left = 15, Top = buttonTop, Width = 100, Minimum = 1, Maximum = count, Value = 1 };
+                Button ok = new Button { Text = "确定", Left = 340, Top = buttonTop - 5, Width = 70, DialogResult = DialogResult.OK };
+                Button cancel = new Button { Text = "取消", Left = 420, Top = buttonTop - 5, Width = 70, DialogResult = DialogResult.Cancel };
                 f.Controls.Add(l); f.Controls.Add(n); f.Controls.Add(ok); f.Controls.Add(cancel); f.AcceptButton = ok; f.CancelButton = cancel;
                 return f.ShowDialog() == DialogResult.OK ? (int)n.Value : 0;
             }
