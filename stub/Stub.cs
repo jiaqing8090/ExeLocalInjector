@@ -861,8 +861,12 @@ namespace ExeProtector
                 else MessageBox.Show("请输入有效的卡密！");
             };
 
-            btnBuy.Text = "在线购买";
+            btnBuy.Text = "购买卡密";
             btnBuy.Click += (s, e) => {
+                if (!onlineMode) {
+                    if (!string.IsNullOrEmpty(buyUrl)) { try { Process.Start(buyUrl); } catch { } }
+                    return;
+                }
                 string paidCard = ExeProtector.Program.PurchaseOnline();
                 if (!string.IsNullOrEmpty(paidCard)) { this.CardCode = paidCard; this.RememberCard = chkSave.Checked; this.DialogResult = DialogResult.OK; }
             };
