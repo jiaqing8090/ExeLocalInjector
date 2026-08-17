@@ -5,6 +5,9 @@ on:
     branches: [main]
   workflow_dispatch:
 
+permissions:
+  contents: write
+
 jobs:
   build:
     runs-on: windows-latest
@@ -25,19 +28,20 @@ jobs:
       - name: Compile updated Stub
         shell: powershell
         run: |
-          $csc = Get-ChildItem "$env:WINDIR\Microsoft.NET\Framework64" -Recurse -Filter csc.exe |
-            Sort-Object FullName -Descending | Select-Object -First 1
+          $csc = Get-ChildItem "$env:WINDIR\Microsoft.NET\Framework64" -Recurse -Filter csc.exe | Sort-Object FullName -Descending | Select-Object -First 1
           if (-not $csc) { throw "C# compiler not found" }
-          & $csc.FullName /nologo /target:winexe /optimize+ `
-            /reference:System.dll `
-            /reference:System.Core.dll `
-            /reference:System.Drawing.dll `
-            /reference:System.Windows.Forms.dll `
-            /win32icon:.\stub\default.ico `
-            /out:.\stub\Verification.exe `
-            .\stub\Stub.cs
+          & $csc.FullName /nologo /target:winexe /optimize+ /reference:System.dll /reference:System.Core.dll /reference:System.Drawing.dll /reference:System.Windows.Forms.dll /win32icon:.\stub\default.ico /out:.\stub\Verification.exe .\stub\Stub.cs
           if ($LASTEXITCODE -ne 0) { throw "Stub compilation failed" }
-          if (-not (Test-Path "stub/Verification.exe")) { throw "Verification.exe was not generated" }
+
+      - name: Publish matching Verification.exe
+        if: github.actor != 'github-actions[bot]'
+        shell: pwsh
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add stub/Verification.exe
+          git diff --cached --quiet
+          if ($LASTEXITCODE -ne 0) { git commit -m "build: publish matching Verification.exe [skip ci]"; git push }
 
       - name: Upload compiled Stub
         uses: actions/upload-artifact@v4
@@ -46,15 +50,9 @@ jobs:
           path: stub/Verification.exe
 
       - name: Build EXE with PyInstaller
-        run: |
-          pyinstaller -F -w `
-            --add-data "stub;stub" `
-            --add-data "tools;tools" `
-            --name "ExeLocalInjector" `
-            --clean `
-            ExeLocalInjector.py
+        run: pyinstaller -F -w --add-data "stub;stub" --add-data "tools;tools" --name "ExeLocalInjector" --clean ExeLocalInjector.py
 
-      - name: Upload artifact
+      - name: Upload injector
         uses: actions/upload-artifact@v4
         with:
           name: ExeLocalInjector-EXE
