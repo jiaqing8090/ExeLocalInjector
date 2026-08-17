@@ -645,6 +645,13 @@ namespace ExeProtector
                 string price = JsonValue(selectedRow, "price");
                 if (string.IsNullOrEmpty(packageId)) { MessageBox.Show("套餐数据缺少 package_id。", "在线购买"); return ""; }
                 string[] paymentRows = JsonArrayObjects(packages, "payment_methods");
+                if (paymentRows.Length == 0 && packages.IndexOf("\"payment_methods\"", StringComparison.OrdinalIgnoreCase) < 0) {
+                    // 兼容旧版后端：旧接口没有 payment_methods，原逻辑默认使用支付宝。
+                    paymentRows = new string[] {
+                        "{\"code\":\"alipay\",\"name\":\"支付宝\"}",
+                        "{\"code\":\"wechat\",\"name\":\"微信支付\"}"
+                    };
+                }
                 if (paymentRows.Length == 0) { MessageBox.Show("商家暂未配置在线支付。", "在线购买"); return ""; }
                 string paymentType = SelectPayment("套餐：" + packageName + "    ¥" + price, paymentRows);
                 if (string.IsNullOrEmpty(paymentType)) return "";
