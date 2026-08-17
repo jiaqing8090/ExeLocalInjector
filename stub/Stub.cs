@@ -47,9 +47,23 @@ namespace ExeProtector
         [STAThread]
         static void Main()
         {
-            Application.EnableVisualStyles();
-            Application.SetCompatibleTextRenderingDefault(false);
-            
+            try
+            {
+                Application.EnableVisualStyles();
+                Application.SetCompatibleTextRenderingDefault(false);
+                Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
+                Application.ThreadException += (s, e) => MessageBox.Show("启动异常：" + e.Exception.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                AppDomain.CurrentDomain.UnhandledException += (s, e) => MessageBox.Show("启动异常：" + (e.ExceptionObject == null ? "未知错误" : e.ExceptionObject.ToString()), "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+                MainInner();
+            }
+            catch (Exception ex)
+            {
+                MessageBox.Show("启动失败：" + ex.Message + "\n\n" + ex.ToString(), "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
+            }
+        }
+
+        static void MainInner()
+        {
             // 解决老版本 .NET 不默认支持 TLS 1.2 导致的 HTTPS 请求失败
             try { ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072 | (SecurityProtocolType)768 | (SecurityProtocolType)192; } catch { }
 
@@ -830,7 +844,7 @@ namespace ExeProtector
             btnBuy = new Button() { Text = "购买卡密", Left = 20, Top = 195, Width = 80, Height = 30, FlatStyle = FlatStyle.Flat, Font = new Font("微软雅黑", 8) };
             btnContact = new Button() { Text = "联系客服", Left = 110, Top = 195, Width = 80, Height = 30, FlatStyle = FlatStyle.Flat, Font = new Font("微软雅黑", 8) };
 
-            btnBuy.Visible = !string.IsNullOrEmpty(buyUrl);
+            btnBuy.Visible = true;
             btnContact.Visible = !string.IsNullOrEmpty(contactUrl);
 
             // 跑马灯公告区域
