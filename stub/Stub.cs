@@ -36,34 +36,18 @@ namespace ExeProtector
         private static string SiteName = "验证系统";
         private static string BuyLink = "";
         private static string ContactLink = "";
-        private static string NoticeText = "";  // 跑马灯公告
-        private static string PopupDiyHtml = ""; // 后台弹窗 DIY HTML
-        private static string RemoteVarsJson = "{}"; // 应用远程变量
-        private static string LastCardCode = "";
-        private static string LastShopOrderNo = "";
+        private static string RemoteVarsJson = "{}";
         private static bool TrialActive = false;
         private static string TrialExpireTime = "";
+        private static string LastShopOrderNo = "";
+        private static string NoticeText = "";
 
         [STAThread]
         static void Main()
         {
-            try
-            {
-                Application.EnableVisualStyles();
-                Application.SetCompatibleTextRenderingDefault(false);
-                Application.SetUnhandledExceptionMode(UnhandledExceptionMode.CatchException);
-                Application.ThreadException += (s, e) => MessageBox.Show("启动异常：" + e.Exception.Message, "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                AppDomain.CurrentDomain.UnhandledException += (s, e) => MessageBox.Show("启动异常：" + (e.ExceptionObject == null ? "未知错误" : e.ExceptionObject.ToString()), "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-                MainInner();
-            }
-            catch (Exception ex)
-            {
-                MessageBox.Show("启动失败：" + ex.Message + "\n\n" + ex.ToString(), "错误", MessageBoxButtons.OK, MessageBoxIcon.Error);
-            }
-        }
-
-        static void MainInner()
-        {
+            Application.EnableVisualStyles();
+            Application.SetCompatibleTextRenderingDefault(false);
+            
             // 解决老版本 .NET 不默认支持 TLS 1.2 导致的 HTTPS 请求失败
             try { ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072 | (SecurityProtocolType)768 | (SecurityProtocolType)192; } catch { }
 
@@ -76,7 +60,7 @@ namespace ExeProtector
                 return;
             }
 
-            // 1. 启动即同步云端配置 (对齐 iOS Verification.m)
+            // 1. 启动即同步云端配置
             FetchConfig();
 
             if (TrialActive)
@@ -106,8 +90,7 @@ namespace ExeProtector
                 }
             }
 
-            // Windows EXE 统一使用稳定的默认卡密窗口，不启动后台 HTML DIY 窗口。
-            using (LoginForm login = new LoginForm(BuyLink, ContactLink, NoticeText))
+            using (LoginForm login = new LoginForm(BuyLink, ContactLink))
             {
                 if (login.ShowDialog() == DialogResult.OK)
                 {
@@ -169,12 +152,10 @@ namespace ExeProtector
                     
                     BuyLink = JsonValue(res, "buy_link");
                     ContactLink = JsonValue(res, "contact_link");
-                    NoticeText = JsonValue(res, "notice");  // 同步跑马灯公告
-                    PopupDiyHtml = ExtractPopupHtml(res);
                     RemoteVarsJson = JsonObjectValue(res, "remote_vars");
-                    string initStatus = JsonValue(res, "status");
-                    TrialActive = initStatus == "trial";
+                    TrialActive = JsonValue(res, "status") == "trial";
                     TrialExpireTime = JsonValue(res, "expire_time");
+                    NoticeText = JsonValue(res, "notice");
                     string interval = JsonValue(res, "heartbeat_interval");
                     if (!string.IsNullOrEmpty(interval)) {
                         int.TryParse(interval, out HeartbeatInterval);
@@ -312,7 +293,8 @@ namespace ExeProtector
                         string calcSign = ComputeSha256(signRaw);
                         
                         if (calcSign.ToLower() != serverSign.ToLower()) {
-                            // 响应签名兼容旧接口：不弹窗、不拦截。
+                            // 暂时仅提醒，不拦截，方便排查
+                            MessageBox.Show("校验异常(可忽略): 签名不匹配。\n预期: " + serverSign.Substring(0, 8) + "...\n实际: " + calcSign.Substring(0, 8) + "...", "安全提示", MessageBoxButtons.OK, MessageBoxIcon.Information);
                         }
                     }
 
@@ -331,11 +313,6 @@ namespace ExeProtector
                             }
                         }
                         
-                        // 同步服务端 DIY、远程变量和配置
-                        PopupDiyHtml = ExtractPopupHtml(result);
-                        RemoteVarsJson = JsonObjectValue(result, "remote_vars");
-                        LastCardCode = card;
-
                         // 4. 展示系统公告
                         string notice = JsonValue(result, "popup_announcement");
                         if (!string.IsNullOrEmpty(notice)) {
@@ -425,6 +402,10 @@ namespace ExeProtector
                 Process p = new Process();
                 p.StartInfo.FileName = targetPath;
                 p.StartInfo.WorkingDirectory = dir;
+                p.StartInfo.UseShellExecute = false;
+                p.StartInfo.EnvironmentVariables["AUTH_REMOTE_VARS_JSON"] = RemoteVarsJson ?? "{}";
+                p.StartInfo.EnvironmentVariables["AUTH_TRIAL_ACTIVE"] = TrialActive ? "1" : "0";
+                p.StartInfo.EnvironmentVariables["AUTH_TRIAL_EXPIRE_TIME"] = TrialExpireTime ?? "";
                 p.Start();
                 
                 // 4. 异步守护逻辑 (兼容 Python 启动)
@@ -492,13 +473,7 @@ namespace ExeProtector
                                 Environment.Exit(0);
                             }
                         }
-                    } catch {
-                        string message = TrialActive
-                            ? "试用模式必须保持联网，请连接网络后重新启动。"
-                            : "网络连接已断开，无法完成授权校验，请连接网络后重新启动。";
-                        MessageBox.Show(message, "授权校验中断", MessageBoxButtons.OK, MessageBoxIcon.Stop);
-                        Environment.Exit(0);
-                    }
+                    } catch { }
                 }
             }) { IsBackground = true }.Start();
         }
@@ -533,108 +508,7 @@ namespace ExeProtector
             catch { }
         }
 
-        static string ExtractPopupHtml(string json)
-        {
-            string obj = JsonObjectValue(json, "popup_diy");
-            string html = JsonValue(obj, "html_code");
-            return string.IsNullOrEmpty(html) ? JsonValue(json, "popup_diy") : html;
-        }
-
-        static bool DiyVerified = false;
-        static string DiyVerifiedCard = "";
-
-        static void ShowDiyPopup()
-        {
-            using (Form form = new Form()) {
-                form.Text = SiteName + " - 授权验证"; form.Width = 460; form.Height = 260; form.StartPosition = FormStartPosition.CenterScreen;
-                form.FormBorderStyle = FormBorderStyle.FixedDialog; form.MinimizeBox = false; form.MaximizeBox = false;
-                Label title = new Label { Text = "请输入卡密进行激活", Left = 22, Top = 18, Width = 390, Height = 28, Font = new Font("Microsoft YaHei", 12, FontStyle.Bold) };
-                Label notice = new Label { Text = string.IsNullOrEmpty(NoticeText) ? "" : "公告：" + NoticeText, Left = 22, Top = 52, Width = 390, Height = 38, AutoSize = false, ForeColor = Color.DarkGoldenrod };
-                TextBox card = new TextBox { Left = 22, Top = 96, Width = 390, Height = 28, Font = new Font("Consolas", 11) };
-                CheckBox remember = new CheckBox { Text = "记住卡密，下次自动验证", Left = 22, Top = 132, Width = 210, Checked = true };
-                Button activate = new Button { Text = "立即激活", Left = 245, Top = 165, Width = 90, Height =  thirtyFive() };
-                Button buy = new Button { Text = "在线购买", Left = 22, Top = 165, Width = 90, Height = 35, Visible = !string.IsNullOrEmpty(BuyLink) };
-                Button contact = new Button { Text = "联系客服", Left = 120, Top = 165, Width = 90, Height = 35, Visible = !string.IsNullOrEmpty(ContactLink) };
-                activate.Click += delegate { string expiry; if (VerifyCard(card.Text.Trim(), false, out expiry)) { DiyVerified = true; DiyVerifiedCard = card.Text.Trim(); if (remember.Checked) try { File.WriteAllText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Auth_" + AppKey.Trim() + ".dat"), DiyVerifiedCard); } catch { } form.DialogResult = DialogResult.OK; form.Close(); } };
-                buy.Click += delegate { string purchased = PurchaseOnline(); if (!string.IsNullOrEmpty(purchased)) { card.Text = purchased; activate.PerformClick(); } };
-                contact.Click += delegate { try { Process.Start(ContactLink); } catch { } };
-                form.Controls.Add(title); form.Controls.Add(notice); form.Controls.Add(card); form.Controls.Add(remember); form.Controls.Add(activate); form.Controls.Add(buy); form.Controls.Add(contact); form.AcceptButton = activate;
-                form.ShowDialog();
-            }
-        }
-
-        static int thirtyFive() { return 35; }
-
-        static void ShowDiyPopupHtml()
-        {
-            if (string.IsNullOrWhiteSpace(PopupDiyHtml)) return;
-            try {
-                using (Form form = new Form()) {
-                    form.Text = SiteName + " - 授权验证"; form.Width = 520; form.Height = 620; form.StartPosition = FormStartPosition.CenterScreen;
-                    form.FormBorderStyle = FormBorderStyle.FixedDialog; form.MinimizeBox = false; form.MaximizeBox = false;
-                    WebBrowser browser = new WebBrowser { Dock = DockStyle.Fill, AllowNavigation = true, ScriptErrorsSuppressed = true, WebBrowserShortcutsEnabled = false };
-                    browser.Navigating += delegate(object sender, WebBrowserNavigatingEventArgs e) {
-                        string url = e.Url.ToString();
-                        if (!url.StartsWith("auth://")) return;
-                        e.Cancel = true;
-                        if (url.StartsWith("auth://activate")) {
-                            string card = ""; bool remember = true;
-                            try {
-                                object cardObj = browser.Document.InvokeScript("eval", new object[] { "document.getElementById('card-input')?document.getElementById('card-input').value:''" });
-                                object remObj = browser.Document.InvokeScript("eval", new object[] { "document.getElementById('remember-card')?document.getElementById('remember-card').checked:true" });
-                                card = cardObj == null ? "" : cardObj.ToString();
-                                remember = remObj == null || remObj.ToString().ToLower() == "true";
-                            } catch { }
-                            string expiry;
-                            if (VerifyCard(card, false, out expiry)) {
-                                DiyVerified = true; DiyVerifiedCard = card;
-                                if (remember) try { File.WriteAllText(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Auth_" + AppKey.Trim() + ".dat"), card); } catch { }
-                                form.DialogResult = DialogResult.OK; form.Close();
-                            }
-                        } else if (url.StartsWith("auth://buy")) {
-                            string card = PurchaseOnline();
-                            if (!string.IsNullOrEmpty(card)) {
-                                string expiry;
-                                if (VerifyCard(card, false, out expiry)) { DiyVerified = true; DiyVerifiedCard = card; form.DialogResult = DialogResult.OK; form.Close(); }
-                            }
-                        } else if (url.StartsWith("auth://contact")) {
-                            if (!string.IsNullOrEmpty(ContactLink)) try { Process.Start(ContactLink); } catch { }
-                        }
-                    };
-                    string diyDocument = WrapDiyHtml(PopupDiyHtml);
-                    bool loaded = false;
-                    string diyFile = Path.Combine(Path.GetTempPath(), "exe_auth_" + Guid.NewGuid().ToString("N") + ".html");
-                    File.WriteAllText(diyFile, diyDocument, Encoding.UTF8);
-                    browser.DocumentCompleted += delegate {
-                        if (loaded || browser.Document == null) return;
-                        loaded = true;
-                        string notice = NoticeText ?? "";
-                        string script = "var n=document.getElementById('notice-box');if(n)n.innerText='公告：' + " + ToJsString(notice) + ";" +
-                            "var b=document.getElementById('buy-btn');if(b){b.style.display='" + (string.IsNullOrEmpty(BuyLink) ? "none" : "") + "';b.onclick=function(){location.href='auth://buy';};}" +
-                            "var c=document.getElementById('contact-btn');if(c){c.style.display='" + (string.IsNullOrEmpty(ContactLink) ? "none" : "") + "';c.onclick=function(){location.href='auth://contact';};}" +
-                            "var a=document.getElementById('activate-btn');if(a)a.onclick=function(){location.href='auth://activate';};";
-                        try { browser.Document.InvokeScript("execScript", new object[] { script, "JavaScript" }); } catch { }
-                    };
-                    form.Shown += delegate {
-                        try { browser.Navigate(new Uri(diyFile).AbsoluteUri); }
-                        catch (Exception ex) { MessageBox.Show("DIY 界面加载失败：" + ex.Message, "授权验证"); form.Close(); }
-                    };
-                    form.FormClosed += delegate { try { if (File.Exists(diyFile)) File.Delete(diyFile); } catch { } };
-                    form.ShowDialog();
-                }
-            } catch { }
-        }
-
-        static string ToJsString(string value) { return "'" + (value ?? "").Replace("\\", "\\\\").Replace("'", "\\'").Replace("\r", "").Replace("\n", "\\n") + "'"; }
-        static string WrapDiyHtml(string html) {
-            string body = html ?? "";
-            // 后台 DIY 是 HTML 片段，统一包装成 IE WebBrowser 可加载的完整文档。
-            int htmlStart = body.IndexOf("<html", StringComparison.OrdinalIgnoreCase);
-            if (htmlStart >= 0) return body;
-            return "<!DOCTYPE html><html><head><meta http-equiv='X-UA-Compatible' content='IE=Edge' /><meta http-equiv='Content-Type' content='text/html; charset=utf-8' /><style>html,body{margin:0;padding:0;background:#f5f7fb;color:#172033;font-family:Microsoft YaHei,Arial,sans-serif;}*{box-sizing:border-box;}</style></head><body>" + body + "</body></html>";
-        }
-
-        internal static string GetRemoteVarsJson() { return RemoteVarsJson ?? "{}"; }
+        internal static string GetNoticeText() { return NoticeText ?? ""; }
 
         internal static string PurchaseOnline()
         {
@@ -644,119 +518,59 @@ namespace ExeProtector
                 string sign = ComputeSha256(AppKey.Trim() + AppSecret.Trim() + ts + nonce);
                 string body = string.Format("{{\"app_key\":\"{0}\",\"timestamp\":\"{1}\",\"nonce\":\"{2}\",\"sign\":\"{3}\",\"platform\":\"windows\"}}", AppKey.Trim(), ts, nonce, sign);
                 string packages;
-                using (var client = new WebClient()) { client.Encoding = Encoding.UTF8; client.Headers[HttpRequestHeader.ContentType] = "application/json; charset=utf-8"; client.Proxy = null; packages = client.UploadString(ApiHost.TrimEnd('/') + "/api/shop/packages", "POST", body); }
-                string data = JsonObjectValue(packages, "data");
+                using (var client = NewJsonClient()) packages = client.UploadString(ApiHost.TrimEnd('/') + "/api/shop/packages", "POST", body);
                 string[] rows = JsonArrayObjects(packages, "data");
-                if (rows.Length == 0 && data != "{}") rows = new string[] { data };
-                if (rows.Length == 0) { MessageBox.Show(JsonValue(packages, "msg") ?? "当前没有可购买套餐。", "在线购买"); return ""; }
-                string list = "请选择套餐编号：\n\n";
-                for (int i = 0; i < rows.Length; i++) list += (i + 1) + ". " + JsonValue(rows[i], "name") + "    ¥" + JsonValue(rows[i], "price") + "\n";
-                int selected = SelectPackage(list, rows.Length);
-                if (selected < 1 || selected > rows.Length) return "";
-                string selectedRow = rows[selected - 1];
-                string packageId = JsonValue(selectedRow, "package_id");
-                string packageName = JsonValue(selectedRow, "name");
-                string price = JsonValue(selectedRow, "price");
-                if (string.IsNullOrEmpty(packageId)) { MessageBox.Show("套餐数据缺少 package_id。", "在线购买"); return ""; }
-                string[] paymentRows = JsonArrayObjects(packages, "payment_methods");
-                if (paymentRows.Length == 0 && packages.IndexOf("\"payment_methods\"", StringComparison.OrdinalIgnoreCase) < 0) {
-                    // 兼容旧版后端：旧接口没有 payment_methods，原逻辑默认使用支付宝。
-                    paymentRows = new string[] {
-                        "{\"code\":\"alipay\",\"name\":\"支付宝\"}",
-                        "{\"code\":\"wechat\",\"name\":\"微信支付\"}"
-                    };
-                }
-                if (paymentRows.Length == 0) { MessageBox.Show("商家暂未配置在线支付。", "在线购买"); return ""; }
-                string paymentType = SelectPayment("套餐：" + packageName + "    ¥" + price, paymentRows);
-                if (string.IsNullOrEmpty(paymentType)) return "";
+                if (rows.Length == 0) { MessageBox.Show(JsonValue(packages, "msg") ?? "当前没有可购买套餐。", "在线激活"); return ""; }
+                int selected = SelectChoice("选择套餐", rows.Select((r, i) => (i + 1) + ". " + JsonValue(r, "name") + "    ¥" + JsonValue(r, "price")).ToArray());
+                if (selected < 0) return "";
+                string packageId = JsonValue(rows[selected], "package_id");
+                string[] methods = JsonArrayObjects(packages, "payment_methods");
+                if (methods.Length == 0 && packages.IndexOf("\"payment_methods\"", StringComparison.OrdinalIgnoreCase) < 0) methods = new[] { "{\"code\":\"alipay\",\"name\":\"支付宝\"}", "{\"code\":\"wechat\",\"name\":\"微信支付\"}" };
+                if (methods.Length == 0) { MessageBox.Show("商家暂未配置在线支付。", "在线激活"); return ""; }
+                int payIndex = SelectChoice("选择支付方式", methods.Select(m => JsonValue(m, "name")).ToArray());
+                if (payIndex < 0) return "";
+                string payType = JsonValue(methods[payIndex], "code");
                 ts = (GetUnixTime() + ServerTimeOffset).ToString(); nonce = Guid.NewGuid().ToString("N").Substring(0, 16); sign = ComputeSha256(AppKey.Trim() + AppSecret.Trim() + ts + nonce);
-                string orderBody = string.Format("{{\"app_key\":\"{0}\",\"package_id\":{1},\"device_id\":\"{2}\",\"pay_type\":\"{3}\",\"auto_activate\":true,\"platform\":\"windows\",\"timestamp\":\"{4}\",\"nonce\":\"{5}\",\"sign\":\"{6}\"}}", AppKey.Trim(), packageId, GetDeviceId(), paymentType, ts, nonce, sign);
-                string order;
-                using (var client = new WebClient()) { client.Encoding = Encoding.UTF8; client.Headers[HttpRequestHeader.ContentType] = "application/json; charset=utf-8"; client.Proxy = null; order = client.UploadString(ApiHost.TrimEnd('/') + "/api/shop/order/create", "POST", orderBody); }
-                string orderData = JsonObjectValue(order, "data");
-                string orderNo = JsonValue(orderData, "order_no"); string payUrl = JsonValue(orderData, "pay_url");
+                string orderBody = string.Format("{{\"app_key\":\"{0}\",\"package_id\":{1},\"device_id\":\"{2}\",\"pay_type\":\"{3}\",\"auto_activate\":true,\"platform\":\"windows\",\"timestamp\":\"{4}\",\"nonce\":\"{5}\",\"sign\":\"{6}\"}}", AppKey.Trim(), packageId, GetDeviceId(), payType, ts, nonce, sign);
+                string order; using (var client = NewJsonClient()) order = client.UploadString(ApiHost.TrimEnd('/') + "/api/shop/order/create", "POST", orderBody);
+                string orderData = JsonObjectValue(order, "data"); string orderNo = JsonValue(orderData, "order_no"); string payUrl = JsonValue(orderData, "pay_url");
                 if (string.IsNullOrEmpty(orderNo) || string.IsNullOrEmpty(payUrl)) { MessageBox.Show(JsonValue(order, "msg"), "创建订单失败"); return ""; }
                 LastShopOrderNo = orderNo; Process.Start(payUrl);
-                if (MessageBox.Show("支付完成后点击确定查询订单。", "等待支付", MessageBoxButtons.OKCancel, MessageBoxIcon.Information) != DialogResult.OK) return "";
-                for (int i = 0; i < 30; i++) {
+                for (int i = 0; i < 60; i++) {
                     Thread.Sleep(2000); ts = (GetUnixTime() + ServerTimeOffset).ToString(); nonce = Guid.NewGuid().ToString("N").Substring(0, 16); sign = ComputeSha256(AppKey.Trim() + AppSecret.Trim() + ts + nonce);
                     string statusBody = string.Format("{{\"app_key\":\"{0}\",\"order_no\":\"{1}\",\"device_id\":\"{2}\",\"platform\":\"windows\",\"timestamp\":\"{3}\",\"nonce\":\"{4}\",\"sign\":\"{5}\"}}", AppKey.Trim(), orderNo, GetDeviceId(), ts, nonce, sign);
-                    string status; using (var client = new WebClient()) { client.Encoding = Encoding.UTF8; client.Headers[HttpRequestHeader.ContentType] = "application/json; charset=utf-8"; client.Proxy = null; status = client.UploadString(ApiHost.TrimEnd('/') + "/api/shop/order/status", "POST", statusBody); }
-                    string statusData = JsonObjectValue(status, "data");
-                    if (JsonValue(statusData, "paid") == "true" || JsonValue(statusData, "activated") == "1") { string card = JsonValue(statusData, "key_code"); if (!string.IsNullOrEmpty(card)) { MessageBox.Show("支付成功，已自动获取卡密。", "购买成功"); return card; } }
+                    string status; using (var client = NewJsonClient()) status = client.UploadString(ApiHost.TrimEnd('/') + "/api/shop/order/status", "POST", statusBody);
+                    string data = JsonObjectValue(status, "data"); string card = JsonValue(data, "key_code");
+                    if ((JsonValue(data, "paid") == "true" || JsonValue(data, "activated") == "1") && !string.IsNullOrEmpty(card)) return card;
+                    Application.DoEvents();
                 }
-                MessageBox.Show("暂未查询到支付结果，请稍后重试。", "订单查询");
-            } catch (Exception ex) { MessageBox.Show("在线购买失败：" + ex.Message, "错误"); }
+                MessageBox.Show("暂未查询到支付结果，请稍后重试。", "在线激活");
+            } catch (Exception ex) { MessageBox.Show("在线激活失败：" + ex.Message, "错误"); }
             return "";
         }
 
-        static string SelectPayment(string title, string[] rows)
-        {
-            string[] labels = new string[rows.Length];
-            for (int i = 0; i < rows.Length; i++) {
-                string code = JsonValue(rows[i], "code"); string name = JsonValue(rows[i], "name");
-                labels[i] = string.IsNullOrEmpty(name) ? code : name;
-            }
-            using (Form f = new Form()) {
-                f.Text = "选择支付方式"; f.Width = 360; f.Height = 190; f.StartPosition = FormStartPosition.CenterScreen;
-                Label l = new Label { Text = title, Left = 15, Top = 15, Width = 320, Height = 35 };
-                ComboBox c = new ComboBox { Left = 15, Top = 58, Width = 320, DropDownStyle = ComboBoxStyle.DropDownList };
-                c.Items.AddRange(labels); if (c.Items.Count > 0) c.SelectedIndex = 0;
-                Button ok = new Button { Text = "继续支付", Left = 175, Top = 105, Width = 75, DialogResult = DialogResult.OK };
-                Button cancel = new Button { Text = "取消", Left = 260, Top = 105, Width = 75, DialogResult = DialogResult.Cancel };
-                f.Controls.Add(l); f.Controls.Add(c); f.Controls.Add(ok); f.Controls.Add(cancel); f.AcceptButton = ok; f.CancelButton = cancel;
-                if (f.ShowDialog() != DialogResult.OK || c.SelectedIndex < 0) return "";
-                return JsonValue(rows[c.SelectedIndex], "code");
-            }
-        }
+        static WebClient NewJsonClient() { var c = new WebClient(); c.Encoding = Encoding.UTF8; c.Headers[HttpRequestHeader.ContentType] = "application/json; charset=utf-8"; c.Proxy = null; return c; }
 
-        static int SelectPackage(string text, int count)
+        static int SelectChoice(string title, string[] labels)
         {
             using (Form f = new Form()) {
-                f.Text = "在线购买 - 选择套餐"; f.Width = 520; f.Height = Math.Min(620, Math.Max(300, 150 + count * 42)); f.StartPosition = FormStartPosition.CenterScreen;
-                Label l = new Label { Text = text, Left = 15, Top = 15, Width = 470, Height = Math.Max(170, count * 32 + 45), AutoSize = false };
-                int buttonTop = Math.Max(195, 30 + count * 32);
-                NumericUpDown n = new NumericUpDown { Left = 15, Top = buttonTop, Width = 100, Minimum = 1, Maximum = count, Value = 1 };
-                Button ok = new Button { Text = "确定", Left = 340, Top = buttonTop - 5, Width = 70, DialogResult = DialogResult.OK };
-                Button cancel = new Button { Text = "取消", Left = 420, Top = buttonTop - 5, Width = 70, DialogResult = DialogResult.Cancel };
-                f.Controls.Add(l); f.Controls.Add(n); f.Controls.Add(ok); f.Controls.Add(cancel); f.AcceptButton = ok; f.CancelButton = cancel;
-                return f.ShowDialog() == DialogResult.OK ? (int)n.Value : 0;
+                f.Text = title; f.Width = 460; f.Height = 180 + labels.Length * 28; f.StartPosition = FormStartPosition.CenterScreen; f.FormBorderStyle = FormBorderStyle.FixedDialog;
+                ListBox list = new ListBox { Left = 15, Top = 15, Width = 415, Height = Math.Max(80, labels.Length * 26) }; list.Items.AddRange(labels); if (labels.Length > 0) list.SelectedIndex = 0;
+                Button ok = new Button { Text = "确定", Left = 275, Top = list.Bottom + 10, Width = 70, DialogResult = DialogResult.OK };
+                Button cancel = new Button { Text = "取消", Left = 360, Top = list.Bottom + 10, Width = 70, DialogResult = DialogResult.Cancel };
+                f.Controls.Add(list); f.Controls.Add(ok); f.Controls.Add(cancel); f.AcceptButton = ok; f.CancelButton = cancel;
+                return f.ShowDialog() == DialogResult.OK ? list.SelectedIndex : -1;
             }
         }
 
         static string[] JsonArrayObjects(string json, string key)
         {
-            try {
-                string marker = "\"" + key + "\""; int idx = json.IndexOf(marker); if (idx < 0) return new string[0];
-                int start = json.IndexOf('[', idx + marker.Length); if (start < 0) return new string[0];
-                int depth = 0; bool quoted = false; bool escaped = false; int objectStart = -1; List<string> result = new List<string>();
-                for (int i = start + 1; i < json.Length; i++) { char c = json[i]; if (escaped) { escaped = false; continue; } if (c == '\\' && quoted) { escaped = true; continue; } if (c == '\"') { quoted = !quoted; continue; } if (quoted) continue; if (c == '{') { if (depth == 0) objectStart = i; depth++; } else if (c == '}' && depth > 0) { depth--; if (depth == 0 && objectStart >= 0) result.Add(json.Substring(objectStart, i - objectStart + 1)); } else if (c == ']' && depth == 0) break; }
-                return result.ToArray();
-            } catch { return new string[0]; }
+            try { string marker = "\"" + key + "\""; int idx = json.IndexOf(marker); if (idx < 0) return new string[0]; int start = json.IndexOf('[', idx + marker.Length); if (start < 0) return new string[0]; int depth = 0; bool quoted = false, escaped = false; int objectStart = -1; List<string> result = new List<string>(); for (int i = start + 1; i < json.Length; i++) { char c = json[i]; if (escaped) { escaped = false; continue; } if (c == '\\' && quoted) { escaped = true; continue; } if (c == '"') { quoted = !quoted; continue; } if (quoted) continue; if (c == '{') { if (depth == 0) objectStart = i; depth++; } else if (c == '}' && depth > 0) { depth--; if (depth == 0) result.Add(json.Substring(objectStart, i - objectStart + 1)); } else if (c == ']' && depth == 0) break; } return result.ToArray(); } catch { return new string[0]; }
         }
 
         static string JsonObjectValue(string json, string key)
         {
-            try {
-                string marker = "\"" + key + "\"";
-                int idx = json.IndexOf(marker);
-                if (idx < 0) return "{}";
-                int colon = json.IndexOf(':', idx + marker.Length);
-                int start = colon + 1;
-                while (start < json.Length && char.IsWhiteSpace(json[start])) start++;
-                if (start >= json.Length || json[start] != '{') return "{}";
-                int depth = 0; bool quoted = false; bool escaped = false;
-                for (int i = start; i < json.Length; i++) {
-                    char c = json[i];
-                    if (escaped) { escaped = false; continue; }
-                    if (c == '\\' && quoted) { escaped = true; continue; }
-                    if (c == '\"') { quoted = !quoted; continue; }
-                    if (quoted) continue;
-                    if (c == '{') depth++;
-                    else if (c == '}' && --depth == 0) return json.Substring(start, i - start + 1);
-                }
-            } catch { }
-            return "{}";
+            try { string marker = "\"" + key + "\""; int idx = json.IndexOf(marker); if (idx < 0) return "{}"; int start = json.IndexOf('{', idx + marker.Length); if (start < 0) return "{}"; int depth = 0; bool quoted = false, escaped = false; for (int i = start; i < json.Length; i++) { char c = json[i]; if (escaped) { escaped = false; continue; } if (c == '\\' && quoted) { escaped = true; continue; } if (c == '"') { quoted = !quoted; continue; } if (quoted) continue; if (c == '{') depth++; else if (c == '}' && --depth == 0) return json.Substring(start, i - start + 1); } } catch { } return "{}";
         }
 
         static string JsonValue(string json, string key)
@@ -775,25 +589,9 @@ namespace ExeProtector
                 if (startPos >= json.Length) return "";
 
                 if (json[startPos] == '\"') {
-                    StringBuilder value = new StringBuilder();
-                    bool escaped = false;
-                    for (int i = startPos + 1; i < json.Length; i++) {
-                        char c = json[i];
-                        if (escaped) {
-                            if (c == 'n') value.Append('\n');
-                            else if (c == 'r') value.Append('\r');
-                            else if (c == 't') value.Append('\t');
-                            else value.Append(c);
-                            escaped = false;
-                        } else if (c == '\\') {
-                            escaped = true;
-                        } else if (c == '\"') {
-                            return value.ToString();
-                        } else {
-                            value.Append(c);
-                        }
-                    }
-                    return "";
+                    int endQuote = json.IndexOf("\"", startPos + 1);
+                    if (endQuote == -1) return "";
+                    return json.Substring(startPos + 1, endQuote - startPos - 1).Replace("\\n", "\n");
                 } else {
                     int endPos = json.IndexOfAny(new char[] { ',', '}', ']' }, startPos);
                     if (endPos == -1) endPos = json.Length;
@@ -820,107 +618,55 @@ namespace ExeProtector
         private Button btnLogin, btnBuy, btnContact, btnMode;
         private CheckBox chkSave;
         private Label lblCard, lblNotice;
-        private bool onlineMode = false;
         private System.Windows.Forms.Timer noticeTimer;
-        private int noticeScrollPos = 0;
-        private string fullNoticeText = "";
+        private string fullNoticeText;
+        private int noticePos;
+        private bool onlineMode;
         public string CardCode { get; private set; }
         public bool RememberCard { get; private set; }
 
-        public LoginForm(string buyUrl, string contactUrl, string noticeText)
+        public LoginForm(string buyUrl, string contactUrl)
         {
-            this.Text = "授权激活";
-            this.Size = new Size(420, 290);
-            this.FormBorderStyle = FormBorderStyle.FixedDialog;
-            this.StartPosition = FormStartPosition.CenterScreen;
-            this.BackColor = Color.WhiteSmoke;
+            Text = "授权激活"; Size = new Size(420, 290); FormBorderStyle = FormBorderStyle.FixedDialog; StartPosition = FormStartPosition.CenterScreen; BackColor = Color.WhiteSmoke; MaximizeBox = false;
+            lblCard = new Label { Text = "请输入卡密进行激活:", Left = 20, Top = 20, Width = 280, Font = new Font("微软雅黑", 10, FontStyle.Bold) };
+            txtCard = new TextBox { Left = 20, Top = 50, Width = 360, Font = new Font("Consolas", 11) };
+            chkSave = new CheckBox { Text = "记住卡密 (下次自动登录)", Left = 20, Top = 90, Width = 220, Checked = true, Font = new Font("微软雅黑", 9) };
+            btnMode = new Button { Text = "在线激活", Left = 320, Top = 12, Width = 80, Height = 28, FlatStyle = FlatStyle.Flat, Font = new Font("微软雅黑", 8) };
+            btnLogin = new Button { Text = "验证启动", Left = 280, Top = 195, Width = 100, Height = 40, FlatStyle = FlatStyle.Flat, BackColor = Color.DeepSkyBlue, ForeColor = Color.White, Font = new Font("微软雅黑", 9, FontStyle.Bold) };
+            btnBuy = new Button { Text = "购买卡密", Left = 20, Top = 200, Width = 90, Height = 30, FlatStyle = FlatStyle.Flat, Font = new Font("微软雅黑", 8) };
+            btnContact = new Button { Text = "联系客服", Left = 120, Top = 200, Width = 90, Height = 30, FlatStyle = FlatStyle.Flat, Font = new Font("微软雅黑", 8), Visible = !string.IsNullOrEmpty(contactUrl) };
 
-            lblCard = new Label() { Text = "请输入卡密进行激活:", Left = 20, Top = 20, Width = 300, Font = new Font("微软雅黑", 10, FontStyle.Bold) };
-            txtCard = new TextBox() { Left = 20, Top = 50, Width = 360, Font = new Font("Consolas", 11) };
-            btnMode = new Button() { Text = "在线激活", Left = 325, Top = 12, Width = 75, Height = 26, FlatStyle = FlatStyle.Flat, Font = new Font("微软雅黑", 8) };
-            chkSave = new CheckBox() { Text = "记住卡密 (下次自动登录)", Left = 20, Top = 90, Width = 200, Checked = true, Font = new Font("微软雅黑", 9) };
+            Panel noticePanel = new Panel { Left = 15, Top = 135, Width = 390, Height = 32, BackColor = Color.FromArgb(255, 243, 205), BorderStyle = BorderStyle.FixedSingle };
+            fullNoticeText = ExeProtector.Program.GetNoticeText();
+            lblNotice = new Label { Left = 5, Top = 5, Width = 378, Height = 20, Font = new Font("微软雅黑", 9), ForeColor = Color.FromArgb(133, 100, 4), TextAlign = ContentAlignment.MiddleLeft };
+            noticePanel.Controls.Add(lblNotice); Controls.Add(noticePanel);
+            if (!string.IsNullOrEmpty(fullNoticeText)) {
+                lblNotice.Text = "公告：" + fullNoticeText;
+                noticeTimer = new System.Windows.Forms.Timer { Interval = 220 };
+                noticeTimer.Tick += delegate { string all = "公告：" + fullNoticeText + "        "; noticePos = (noticePos + 1) % all.Length; string loop = all + all; lblNotice.Text = loop.Substring(noticePos, Math.Min(38, loop.Length - noticePos)); };
+                noticeTimer.Start();
+            } else noticePanel.Visible = false;
 
-            btnLogin = new Button() { Text = "验证启动", Left = 280, Top = 190, Width = 100, Height = 40, FlatStyle = FlatStyle.Flat, BackColor = Color.DeepSkyBlue, ForeColor = Color.White, Font = new Font("微软雅黑", 9, FontStyle.Bold) };
-            btnBuy = new Button() { Text = "购买卡密", Left = 20, Top = 195, Width = 80, Height = 30, FlatStyle = FlatStyle.Flat, Font = new Font("微软雅黑", 8) };
-            btnContact = new Button() { Text = "联系客服", Left = 110, Top = 195, Width = 80, Height = 30, FlatStyle = FlatStyle.Flat, Font = new Font("微软雅黑", 8) };
-
-            btnBuy.Visible = true;
-            btnContact.Visible = !string.IsNullOrEmpty(contactUrl);
-
-            // 跑马灯公告区域
-            fullNoticeText = noticeText ?? "";
-            if (!string.IsNullOrEmpty(fullNoticeText))
-            {
-                Panel noticePanel = new Panel() { Left = 15, Top = 125, Width = 390, Height = 30, BackColor = Color.FromArgb(255, 243, 205), BorderStyle = BorderStyle.FixedSingle };
-                lblNotice = new Label() { Text = fullNoticeText, Left = 0, Top = 5, Width = 390, Height = 20, Font = new Font("微软雅黑", 9), ForeColor = Color.FromArgb(133, 100, 4), TextAlign = System.Drawing.ContentAlignment.MiddleLeft };
-
-                // 跑马灯滚动效果
-                if (fullNoticeText.Length > 30)
-                {
-                    noticeScrollPos = 0;
-                    noticeTimer = new System.Windows.Forms.Timer() { Interval = 200 };
-                    noticeTimer.Tick += (s, e) =>
-                    {
-                        noticeScrollPos++;
-                        if (noticeScrollPos > fullNoticeText.Length + 5) noticeScrollPos = 0;
-                        string display = fullNoticeText.Substring(noticeScrollPos % (fullNoticeText.Length + 1)) + "    " + fullNoticeText;
-                        lblNotice.Text = display.Length > 40 ? display.Substring(0, 40) : display;
-                    };
-                    noticeTimer.Start();
-                }
-
-                noticePanel.Controls.Add(lblNotice);
-                this.Controls.Add(noticePanel);
-            }
-
-            btnMode.Click += (s, e) => { SetOnlineMode(!onlineMode, buyUrl, contactUrl); };
-
-            btnLogin.Click += (s, e) => {
-                this.CardCode = txtCard.Text.Trim();
-                this.RememberCard = chkSave.Checked;
-                if (!string.IsNullOrEmpty(this.CardCode)) this.DialogResult = DialogResult.OK;
-                else MessageBox.Show("请输入有效的卡密！");
+            btnMode.Click += delegate { SetOnlineMode(!onlineMode, buyUrl); };
+            btnLogin.Click += delegate { CardCode = txtCard.Text.Trim(); RememberCard = chkSave.Checked; if (!string.IsNullOrEmpty(CardCode)) DialogResult = DialogResult.OK; else MessageBox.Show("请输入有效的卡密！"); };
+            btnBuy.Click += delegate {
+                if (!onlineMode) { if (!string.IsNullOrEmpty(buyUrl)) Process.Start(buyUrl); return; }
+                string card = ExeProtector.Program.PurchaseOnline();
+                if (!string.IsNullOrEmpty(card)) { CardCode = card; RememberCard = chkSave.Checked; DialogResult = DialogResult.OK; }
             };
+            btnContact.Click += delegate { if (!string.IsNullOrEmpty(contactUrl)) Process.Start(contactUrl); };
 
-            btnBuy.Text = "购买卡密";
-            btnBuy.Click += (s, e) => {
-                if (!onlineMode) {
-                    if (!string.IsNullOrEmpty(buyUrl)) { try { Process.Start(buyUrl); } catch { } }
-                    return;
-                }
-                string paidCard = ExeProtector.Program.PurchaseOnline();
-                if (!string.IsNullOrEmpty(paidCard)) { this.CardCode = paidCard; this.RememberCard = chkSave.Checked; this.DialogResult = DialogResult.OK; }
-            };
-
-            btnContact.Click += (s, e) => {
-                if (!string.IsNullOrEmpty(contactUrl)) Process.Start(contactUrl);
-                else MessageBox.Show("后台未配置客服链接。");
-            };
-
-            this.Controls.Add(lblCard);
-            this.Controls.Add(txtCard);
-            this.Controls.Add(btnMode);
-            this.Controls.Add(chkSave);
-            this.Controls.Add(btnLogin);
-            this.Controls.Add(btnBuy);
-            this.Controls.Add(btnContact);
-            this.AcceptButton = btnLogin;
+            Controls.Add(lblCard); Controls.Add(txtCard); Controls.Add(chkSave); Controls.Add(btnMode); Controls.Add(btnLogin); Controls.Add(btnBuy); Controls.Add(btnContact); AcceptButton = btnLogin;
         }
 
-        private void SetOnlineMode(bool online, string buyUrl, string contactUrl)
+        private void SetOnlineMode(bool online, string buyUrl)
         {
-            onlineMode = online;
-            lblCard.Visible = !online;
-            txtCard.Visible = !online;
-            chkSave.Visible = !online;
-            btnLogin.Visible = !online;
+            onlineMode = online; lblCard.Visible = !online; txtCard.Visible = !online; chkSave.Visible = !online; btnLogin.Visible = !online;
             btnMode.Text = online ? "卡密激活" : "在线激活";
-            btnBuy.Visible = online || !string.IsNullOrEmpty(buyUrl);
-            btnBuy.Text = online ? "选择套餐并支付" : "购买卡密";
-            btnBuy.Left = online ? 115 : 20;
-            btnContact.Left = online ? 205 : 110;
-            btnContact.Visible = !string.IsNullOrEmpty(contactUrl);
-            this.AcceptButton = online ? null : btnLogin;
+            btnBuy.Text = online ? "选择套餐并支付" : "购买卡密"; btnBuy.Width = online ? 130 : 90; btnBuy.Left = online ? 125 : 20;
+            btnContact.Left = online ? 265 : 120; btnBuy.Visible = online || !string.IsNullOrEmpty(buyUrl); AcceptButton = online ? null : btnLogin;
         }
+
+        protected override void Dispose(bool disposing) { if (disposing && noticeTimer != null) noticeTimer.Dispose(); base.Dispose(disposing); }
     }
 }
